@@ -39,23 +39,30 @@ def loadImage(path):
     os.remove(filename)
     return img
 
-def cropNdarray(img, centerx, centery, width, height):
-    imageHeight,imageWidth = img.shape
-    startx = int(centerx - width/2)
+def cropNdarray(img, tile_width, tile_height, centerx, centery, width, height):
+    image_height, image_width = img.shape
+    startx = centerx - width/2
     endx = startx + width
+
+    startx = int(startx * image_width / tile_width)
+    endx = int(endx  * image_width / tile_width)
+
 
     if startx < 0:
         startx = 0
-    if endx > imageWidth:
-        endx = imageWidth
+    if endx > image_width:
+        endx = image_width
 
-    starty = int(centery - height/2)
+    starty = centery - height/2
     endy = starty + height
+
+    starty = int(starty * image_height / tile_height)
+    endy = int(endy * image_height / tile_height)
 
     if starty < 0:
         starty = 0
-    if endy > imageHeight:
-        endy = imageHeight
+    if endy > image_height:
+        endy = image_height
 
     return img[starty:endy, startx:endx]
 
@@ -126,14 +133,15 @@ class SentinelAddress:
             maxx = max([c[0] for c in coords])
             maxy = max([c[1] for c in coords])
 
+            tile_width = maxx - minx
+            tile_height = maxy - miny
+
             centerx = int(self.Easting - minx)
             centery = int(maxy - self.Northing)
 
             img = loadImage(path + filename)
-            imageHeight, imageWidth = np.shape(img)
 
-
-            img2 = cropNdarray(img, centerx, centery, size, size)
+            img2 = cropNdarray(img, tile_width, tile_height, centerx, centery, size, size)
 
             mpimg.imsave(targetfilename, img2, format='jpg', cmap=plt.cm.gray)
             # scipy.misc.imsave(targetfilename, img2)
