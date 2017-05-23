@@ -9,6 +9,7 @@ from PIL import Image
 import datetime
 import os.path
 import numpy as np
+import utm
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 
@@ -17,7 +18,44 @@ s3_resource = boto3.resource('s3', region_name='us-east-2')
 s3_client = boto3.client('s3', region_name='us-east-2')
 bucket = s3_resource.Bucket(bucket_name)
 
-EarthRadius = 6371008.8
+# EarthRadius = 6371008.8
+#
+# # earth equatorial radius
+# a = 6378.137
+#
+# # inverse flattening
+# f_inv = 298.257223563
+#
+# # flattening
+# f = 1./f_inv
+#
+# N_north = 0
+# N_south = 10000
+# k0 = 0.9996
+# E0 = 500
+#
+# n = f / (2 - f)
+#
+# A = a / (1 + n) * (1 + n/4*n + n/64*n*n*n)
+#
+# alpha1 = n/2 - 2*n/3*n + 5*n/16*n*n
+#
+# alpha2 = 13*n/48*n - 3*n/5*n*n
+#
+# alpha3 = 61*n/240*n*n
+#
+# beta1 = n / 2 - 2*n/3*n + 37*n/96*n*n
+#
+# beta2 = n/48*n + n/15*n*n
+#
+# beta3 = 17 * n / 480 *n *n
+#
+# delta1 = 2*n -2*n/3*n - 2*n*n*n
+#
+# delta2 = 7*n/3*n - 8*n/5*n*n
+#
+# delta3 = 56*n/15*n*n
+
 m = mgrs.MGRS()
 
 def retrieveSubdirectories(root):
@@ -73,7 +111,7 @@ class SentinelAddress:
         self.Longitude = longitude
         self.Latitude = latitude
 
-        self.LatitudeCircleRadius = EarthRadius * math.cos(math.radians(latitude))
+        #self.LatitudeCircleRadius = EarthRadius * math.cos(math.radians(latitude))
 
         self.mgrs = m.toMGRS(latitude, longitude).decode('cp1252')
 
@@ -86,10 +124,7 @@ class SentinelAddress:
         self.TilePathBase = 'tiles/' + self.UTM + '/' + self.LatitudeBand + '/' + self.Square + '/'
 
         self.CentralMeridian = (int(self.UTM) - 1) * 6 + 3 - 180
-        self.Easting = math.radians(longitude - self.CentralMeridian) * self.LatitudeCircleRadius + 500000
-        self.Northing = math.radians(latitude) * EarthRadius
-        if self.Northing < 0:
-            self.Northing += 10000000
+        self.Easting, self.Northing, UTM2, LatitudeBand2 = utm.from_latlon(latitude, longitude)
 
 
 
@@ -118,44 +153,62 @@ class SentinelAddress:
 
         return ans
 
-    def retrieveCrops(self, filename, size):
+    def retrieveCrops(self, size, *filenames):
         infos = self.retrieveTileInfos()
         for d, info in infos.items():
             coords = info[0]['tileInfo']['tileGeometry']['coordinates'][0]
             path = info[0]['path']
-            targetfilename = d.strftime('%Y%m%d' + filename)
-            targetfilename = os.path.splitext(targetfilename)[0] + '.jpg'
+            cloudyPixelPercentage = info[0]['tileInfo']['cloudyPixelPercentage']
 
-            print("Cropping " + path + filename)
+            if cloudyPixelPercentage < 50:
+                images = ()
+                for filename in filenames:
+                    targetfilename = d.strftime('%Y%m%d' + filename)
+                    targetfilename = os.path.splitext(targetfilename)[0] + '.jpg'
 
-            minx = min([c[0] for c in coords])
-            miny = min([c[1] for c in coords])
-            maxx = max([c[0] for c in coords])
-            maxy = max([c[1] for c in coords])
+                    print("Cropping " + path + filename)
 
-            tile_width = maxx - minx
-            tile_height = maxy - miny
+                    minx = min([c[0] for c in coords])
+                    miny = min([c[1] for c in coords])
+                    maxx = max([c[0] for c in coords])
+                    maxy = max([c[1] for c in coords])
 
-            centerx = int(self.Easting - minx)
-            centery = int(maxy - self.Northing)
+                    tile_width = maxx - minx
+                    tile_height = maxy - miny
 
-            img = loadImage(path + filename)
+                    centerx = int(self.Easting - minx)
+                    centery = int(maxy - self.Northing)
 
-            img2 = cropNdarray(img, tile_width, tile_height, centerx, centery, size, size)
+                    img = loadImage(path + filename)
 
-            mpimg.imsave(targetfilename, img2, format='jpg', cmap=plt.cm.gray)
-            # scipy.misc.imsave(targetfilename, img2)
+                    img2 = cropNdarray(img, tile_width, tile_height, centerx, centery, size, size)
 
-            print("Saved ", targetfilename)
+                    images = images + (img2,)
+
+                multiimage = np.dstack(images)
+
+                mx = np.amax(multiimage)
+                mn = np.amin(multiimage)
+
+                multiimage = np.divide(np.subtract(multiimage, mn), (mx-mn))
+
+                mpimg.imsave(targetfilename, multiimage, format='jpg')
+                # scipy.misc.imsave(targetfilename, img2)
+
+                print("Saved ", targetfilename)
 
 
+# St. Basel
+latitude = 55.752442
+longitude = 37.623172
 
-latitude = 55.752486
-longitude = 37.623199
+# # tanks
+# latitude = 32.07910197387007
+# longitude = -103.17672729492188
 
 s = SentinelAddress(latitude, longitude)
 
-s.retrieveCrops('B02.jp2', 100)
+s.retrieveCrops(4000, 'B02.jp2', 'B03.jp2', 'B04.jp2')
 
 
 
