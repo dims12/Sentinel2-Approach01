@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import json
-import math
 import mgrs
 import re
 import boto3
@@ -10,6 +9,7 @@ import datetime
 import os.path
 import numpy as np
 import utm
+import sys
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 
@@ -63,18 +63,26 @@ def retrieveSubdirectories(root):
     preans = result['CommonPrefixes']
     return [prefix['Prefix'] for prefix in preans]
 
-def loadJson(path):
+def cacheObject(path):
     object = bucket.Object(path)
-    file_content = object.get()['Body'].read().decode('utf-8')
-    ans = json.loads(file_content)
+    if not os.path.isfile(path):
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
+        object.download_file(path)
+
+def loadJson(path):
+    cacheObject(path)
+
+    #file_content = object.get()['Body'].read().decode('utf-8')
+    with open(path) as data_file:
+        ans = json.load(data_file)
+
     return ans
 
 def loadImage(path):
-    object = bucket.Object(path)
-    filename = os.path.basename(os.path.normpath(path))
-    object.download_file(filename)
-    img = mpimg.imread(filename)
-    os.remove(filename)
+    cacheObject(path)
+
+    img = mpimg.imread(path)
     return img
 
 def cropNdarray(img, tile_width, tile_height, centerx, centery, width, height):
@@ -106,10 +114,11 @@ def cropNdarray(img, tile_width, tile_height, centerx, centery, width, height):
 
 class SentinelAddress:
 
-    def __init__(self, latitude, longitude):
+    def __init__(self, latitude, longitude, start_date=None):
 
         self.Longitude = longitude
         self.Latitude = latitude
+        self.StartDate = start_date
 
         #self.LatitudeCircleRadius = EarthRadius * math.cos(math.radians(latitude))
 
@@ -138,20 +147,34 @@ class SentinelAddress:
                 for day_path in retrieveSubdirectories(month_path):
                     day = int(os.path.basename(os.path.normpath(day_path)))
                     d = datetime.date(year, month, day)
-                    for seq_path in retrieveSubdirectories(day_path):
 
-                        print("Retrieving info for " + seq_path)
+                    if (self.StartDate is None) or (d >= self.StartDate):
+                        for seq_path in retrieveSubdirectories(day_path):
 
-                        tileInfo = loadJson(seq_path + 'tileInfo.json')
+                            print("Retrieving info for " + seq_path)
 
-                        descr = {'path': seq_path, 'tileInfo': tileInfo}
+                            tileInfo = loadJson(seq_path + 'tileInfo.json')
 
-                        if d in ans:
-                            ans[d].append(descr)
-                        else:
-                            ans[d] = [descr]
+                            descr = {'path': seq_path, 'tileInfo': tileInfo}
+
+                            if d in ans:
+                                ans[d].append(descr)
+                            else:
+                                ans[d] = [descr]
 
         return ans
+
+    def getTargetDirectory(self):
+        if self.Latitude >= 0:
+            latstr = "N%010.7f" % (self.Latitude,)
+        else:
+            latstr = "S%010.7f" % (-self.Latitude,)
+
+        if self.Longitude >= 0:
+            lngstr = "E%010.7f" % (self.Longitude,)
+        else:
+            lngstr = "W%010.7f" % (-self.Longitude,)
+        return 'results/' + latstr + '_' + lngstr + '/'
 
     def retrieveCrops(self, size, *filenames):
         infos = self.retrieveTileInfos()
@@ -162,11 +185,15 @@ class SentinelAddress:
 
             if cloudyPixelPercentage < 50:
                 images = ()
-                for filename in filenames:
-                    targetfilename = d.strftime('%Y%m%d' + filename)
-                    targetfilename = os.path.splitext(targetfilename)[0] + '.jpg'
 
-                    print("Cropping " + path + filename)
+                targetfilename = self.getTargetDirectory() + d.strftime('%Y%m%d') + '.jpg'
+                if not os.path.exists(os.path.dirname(targetfilename)):
+                    os.makedirs(os.path.dirname(targetfilename))
+
+                for filename in filenames:
+
+
+                    print("Loading and cropping " + path + filename)
 
                     minx = min([c[0] for c in coords])
                     miny = min([c[1] for c in coords])
@@ -187,28 +214,48 @@ class SentinelAddress:
 
                 multiimage = np.dstack(images)
 
-                mx = np.amax(multiimage)
-                mn = np.amin(multiimage)
+                multiimage = np.divide(multiimage, 64)
+                multiimage = multiimage.astype(np.uint8)
 
-                multiimage = np.divide(np.subtract(multiimage, mn), (mx-mn))
-
+                print("Saving " + path + filename)
                 mpimg.imsave(targetfilename, multiimage, format='jpg')
                 # scipy.misc.imsave(targetfilename, img2)
 
-                print("Saved ", targetfilename)
+
+
+
+def retrieveCrops(latitude, longitude, start_date, size):
+    s = SentinelAddress(latitude, longitude, start_date)
+    s.retrieveCrops(size, 'B04.jp2', 'B03.jp2', 'B02.jp2')
 
 
 # St. Basel
-latitude = 55.752442
-longitude = 37.623172
+# latitude = 55.752442
+# longitude = 37.623172
 
 # # tanks
 # latitude = 32.07910197387007
 # longitude = -103.17672729492188
 
-s = SentinelAddress(latitude, longitude)
+if len(sys.argv) == 5:
 
-s.retrieveCrops(4000, 'B02.jp2', 'B03.jp2', 'B04.jp2')
+    latitude = float(sys.argv[1])
+    longitude = float(sys.argv[2])
+
+
+    start_date = datetime.datetime.strptime(sys.argv[3], '%Y%m%d').date()
+
+    size = int(sys.argv[4])
+
+    retrieveCrops(latitude, longitude, start_date, size)
+
+else:
+    print('Usage:\nsentinel latitude longitude start_date size')
+
+
+
+
+
 
 
 
