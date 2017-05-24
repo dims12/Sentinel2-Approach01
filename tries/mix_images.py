@@ -15,8 +15,9 @@ img_blue = mpimg.imread('B02.jp2')
 
 img = np.dstack((img_red, img_green, img_blue))
 
-img = np.divide(img, 256)
+img = np.divide(img, 64)
 img = img.astype(np.uint8)
 
+print('Saving MIX.jpeg...')
 mpimg.imsave('MIX.jpeg', img, format='jpg')
 
